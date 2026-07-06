@@ -29,6 +29,9 @@ function isExtensionOrigin(origin: string): boolean {
 function isWildcardCorsPath(path: string): boolean {
   return (
     path.startsWith('/icons/')
+    || path.startsWith('/fill-assist/')
+    || path === '/v1/assetlinks:check'
+    || path === '/api/v1/assetlinks:check'
     || path === '/config'
     || path === '/api/config'
     || path === '/api/version'
@@ -134,6 +137,10 @@ export function errorResponse(message: string, status: number = 400): Response {
     },
     status
   );
+}
+
+export function unsupportedResponse(message: string = 'This feature is not supported by this server.'): Response {
+  return errorResponse(message, 501);
 }
 
 // Identity endpoint error response (for /identity/connect/token)

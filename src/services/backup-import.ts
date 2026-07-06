@@ -4,6 +4,7 @@ import { BACKUP_SETTINGS_CONFIG_KEY, normalizeImportedBackupSettingsValue } from
 import {
   type BackupManifestAttachmentBlob,
   type BackupPayload,
+  isSafeBackupAttachmentBlobName,
   parseBackupArchive,
   validateBackupPayloadContents,
 } from './backup-archive';
@@ -297,6 +298,7 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
     users: cloneRows(payload.users || []).map((row) => ({
       ...row,
       verify_devices: row.verify_devices ?? 1,
+      yubikey_nfc: row.yubikey_nfc ?? 0,
     })),
     domain_settings: cloneRows(payload.domain_settings || []),
     user_revisions: cloneRows(payload.user_revisions || []),
@@ -461,9 +463,20 @@ async function restoreBlobFiles(env: Env, db: BackupPayload['db'], files: Record
 }
 
 function buildAttachmentBlobLookup(manifest: BackupPayload['manifest']): Map<string, BackupManifestAttachmentBlob> {
-  return new Map(
-    (manifest.attachmentBlobs || []).map((item) => [`${item.cipherId}/${item.attachmentId}`, item])
-  );
+  const lookup = new Map<string, BackupManifestAttachmentBlob>();
+  for (const item of manifest.attachmentBlobs || []) {
+    const cipherId = String(item.cipherId || '').trim();
+    const attachmentId = String(item.attachmentId || '').trim();
+    const blobName = String(item.blobName || '').trim();
+    if (!cipherId || !attachmentId || !isSafeBackupAttachmentBlobName(blobName)) continue;
+    lookup.set(`${cipherId}/${attachmentId}`, {
+      ...item,
+      cipherId,
+      attachmentId,
+      blobName,
+    });
+  }
+  return lookup;
 }
 
 async function prepareRemoteAttachmentPayload(
@@ -619,7 +632,7 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     buildInsertStatements(
       db,
       tableName('users'),
-      ['id', 'email', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'created_at', 'updated_at'],
+      ['id', 'email', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'],
       payload.users || []
     )
   );
