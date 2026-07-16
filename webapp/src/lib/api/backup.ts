@@ -196,11 +196,14 @@ export async function exportAdminBackup(
 
 export async function downloadAdminBackupAttachmentBlob(
   authedFetch: AuthedFetch,
-  blobName: string
+  blobName: string,
+  masterPasswordHash: string
 ): Promise<Uint8Array> {
-  const params = new URLSearchParams();
-  params.set('blobName', blobName);
-  const resp = await authedFetch(`/api/admin/backup/blob?${params.toString()}`, { method: 'GET' });
+  const resp = await authedFetch('/api/admin/backup/blob', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ blobName, masterPasswordHash }),
+  });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, t('txt_backup_export_failed')));
   return new Uint8Array(await resp.arrayBuffer());
 }
@@ -246,7 +249,7 @@ export async function buildCompleteAdminBackupExport(
     stageDetail: 'txt_backup_export_progress_fetch_attachments_detail',
   });
   for (const attachment of manifest.attachmentBlobs || []) {
-    const bytes = await downloadAdminBackupAttachmentBlob(authedFetch, attachment.blobName);
+    const bytes = await downloadAdminBackupAttachmentBlob(authedFetch, attachment.blobName, masterPasswordHash);
     zipped[`attachments/${attachment.cipherId}/${attachment.attachmentId}.bin`] = bytes;
   }
 
@@ -417,13 +420,15 @@ export async function deleteRemoteBackup(
 
 export async function inspectRemoteBackupIntegrity(
   authedFetch: AuthedFetch,
+  masterPasswordHash: string,
   destinationId: string,
   path: string
 ): Promise<RemoteBackupIntegrityResponse> {
-  const params = new URLSearchParams();
-  params.set('destinationId', destinationId);
-  params.set('path', path);
-  const resp = await authedFetch(`/api/admin/backup/remote/integrity?${params.toString()}`, { method: 'GET' });
+  const resp = await authedFetch('/api/admin/backup/remote/integrity', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ destinationId, path, masterPasswordHash }),
+  });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, t('txt_backup_remote_download_failed')));
   const body = await parseJson<RemoteBackupIntegrityResponse>(resp);
   if (!body?.integrity || !body?.fileName) throw new Error(t('txt_backup_remote_invalid_response'));

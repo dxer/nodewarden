@@ -280,6 +280,8 @@ export interface Send {
   key?: string | null;
   maxAccessCount?: number | null;
   accessCount?: number;
+  password?: string | null;
+  authType?: number | null;
   disabled?: boolean;
   revisionDate?: string;
   expirationDate?: string | null;
@@ -308,6 +310,7 @@ export interface SendDraft {
   expirationDays: string;
   maxAccessCount: string;
   password: string;
+  hasPassword?: boolean;
   disabled: boolean;
 }
 
@@ -411,6 +414,8 @@ export interface WebBootstrapResponse {
   jwtUnsafeReason?: 'missing' | 'too_short' | null;
   jwtSecretMinLength?: number;
   registrationInviteRequired?: boolean;
+  webAuthnAllowedOrigins?: string[];
+  websiteIconsEnabled?: boolean;
 }
 
 export interface YubiKeyOtpSettings {

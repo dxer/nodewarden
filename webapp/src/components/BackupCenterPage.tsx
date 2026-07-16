@@ -13,6 +13,7 @@ import {
 } from '@/lib/api/backup';
 import {
   REMOTE_BROWSER_ITEMS_PER_PAGE,
+  REMOTE_BROWSER_REFRESH_TTL_MS,
   compareRemoteItems,
   createDraftBackupSettings,
   createDraftDestinationRecord,
@@ -42,7 +43,7 @@ interface BackupCenterPageProps {
   onRunRemoteBackup: (masterPassword: string, destinationId?: string | null) => Promise<AdminBackupRunResponse>;
   onListRemoteBackups: (destinationId: string, path: string) => Promise<RemoteBackupBrowserResponse>;
   onDownloadRemoteBackup: (masterPassword: string, destinationId: string, path: string, onProgress?: (percent: number | null) => void) => Promise<void>;
-  onInspectRemoteBackup: (destinationId: string, path: string) => Promise<{ object: 'backup-remote-integrity'; destinationId: string; path: string; fileName: string; integrity: BackupFileIntegrityCheckResult }>;
+  onInspectRemoteBackup: (masterPassword: string, destinationId: string, path: string) => Promise<{ object: 'backup-remote-integrity'; destinationId: string; path: string; fileName: string; integrity: BackupFileIntegrityCheckResult }>;
   onDeleteRemoteBackup: (masterPassword: string, destinationId: string, path: string) => Promise<void>;
   onRestoreRemoteBackup: (masterPassword: string, destinationId: string, path: string, replaceExisting?: boolean) => Promise<AdminBackupImportResponse>;
   onRestoreRemoteBackupAllowingChecksumMismatch: (masterPassword: string, destinationId: string, path: string, replaceExisting?: boolean) => Promise<AdminBackupImportResponse>;
@@ -217,6 +218,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
   const [remoteBrowserCache, setRemoteBrowserCache] = useState<Record<string, RemoteBackupBrowserResponse>>(persistedRemoteState.cache);
   const [remoteBrowserPathByDestination, setRemoteBrowserPathByDestination] = useState<Record<string, string>>(persistedRemoteState.pathByDestination);
   const [remoteBrowserPageByKey, setRemoteBrowserPageByKey] = useState<Record<string, number>>(persistedRemoteState.pageByKey);
+  const [remoteBrowserRefreshedAt, setRemoteBrowserRefreshedAt] = useState<Record<string, number>>(persistedRemoteState.refreshedAt || {});
   const [showAddChooser, setShowAddChooser] = useState(false);
 
   const visibleDestinations = getVisibleDestinations(settings);
@@ -308,8 +310,22 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
       pathByDestination: remoteBrowserPathByDestination,
       pageByKey: remoteBrowserPageByKey,
       selectedDestinationId,
+      refreshedAt: remoteBrowserRefreshedAt,
     });
-  }, [props.currentUserId, remoteBrowserCache, remoteBrowserPageByKey, remoteBrowserPathByDestination, selectedDestinationId]);
+  }, [props.currentUserId, remoteBrowserCache, remoteBrowserPageByKey, remoteBrowserPathByDestination, remoteBrowserRefreshedAt, selectedDestinationId]);
+
+  useEffect(() => {
+    if (!savedSelectedDestination) return;
+    const destinationId = savedSelectedDestination.id;
+    const path = remoteBrowserPathByDestination[destinationId] || '';
+    const cacheKey = getRemoteBrowserCacheKey(destinationId, path);
+    const lastRefreshed = remoteBrowserRefreshedAt[cacheKey] || 0;
+    const isStale = Date.now() - lastRefreshed > REMOTE_BROWSER_REFRESH_TTL_MS;
+    if (isStale) {
+      void loadRemoteBrowser(destinationId, path, { force: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedSelectedDestination?.id]);
 
   useEffect(() => {
     if (!restoreProgress) {
@@ -398,6 +414,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
       };
       setRemoteBrowserCache((current) => ({ ...current, [cacheKey]: nextBrowser }));
       setRemoteBrowserPageByKey((current) => ({ ...current, [cacheKey]: 1 }));
+      setRemoteBrowserRefreshedAt((current) => ({ ...current, [cacheKey]: Date.now() }));
     } catch (error) {
       const message = error instanceof Error ? error.message : t('txt_backup_remote_load_failed');
       setLocalError(message);
@@ -492,8 +509,8 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
     return verifyBackupFileIntegrity(bytes, file.name || '');
   }
 
-  async function inspectRemoteBackupFile(destinationId: string, path: string): Promise<PendingRestoreIntegrity> {
-    const payload = await props.onInspectRemoteBackup(destinationId, path);
+  async function inspectRemoteBackupFile(masterPassword: string, destinationId: string, path: string): Promise<PendingRestoreIntegrity> {
+    const payload = await props.onInspectRemoteBackup(masterPassword, destinationId, path);
     return {
       source: 'remote',
       path,
@@ -543,6 +560,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
       ).cache);
       setRemoteBrowserPathByDestination((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== destinationIdToDelete)));
       setRemoteBrowserPageByKey((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToDelete}:`))));
+      setRemoteBrowserRefreshedAt((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToDelete}:`))));
       setSelectedDestinationId(nextSelected);
       setConfirmDeleteDestinationOpen(false);
       props.onNotify('success', t('txt_backup_destination_deleted'));
@@ -670,6 +688,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
         setRemoteBrowserCache((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToInvalidate}:`))));
         setRemoteBrowserPathByDestination((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== destinationIdToInvalidate)));
         setRemoteBrowserPageByKey((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToInvalidate}:`))));
+        setRemoteBrowserRefreshedAt((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToInvalidate}:`))));
       }
       setSelectedDestinationId(nextSelected);
       props.onNotify('success', t('txt_backup_settings_saved'));
@@ -800,19 +819,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
     if (!savedSelectedDestination) return;
     setLocalError('');
     resetPendingIntegrityWarning();
-    try {
-      const integrity = await inspectRemoteBackupFile(savedSelectedDestination.id, path);
-      if (!integrity.result.matches) {
-        setPendingRestoreIntegrity(integrity);
-        setConfirmIntegrityWarningOpen(true);
-        return;
-      }
-      await runRemoteRestore(path, false, false, integrity.result);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : t('txt_backup_integrity_check_failed');
-      setLocalError(message);
-      props.onNotify('error', message);
-    }
+    await runRemoteRestore(path, false);
   }
 
   async function runRemoteRestore(
@@ -846,7 +853,23 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
     setRestoringRemotePath(path);
     setLocalError('');
     try {
-      const integrity = knownIntegrity ? { result: knownIntegrity } : await inspectRemoteBackupFile(savedSelectedDestination.id, path);
+      const integrity = knownIntegrity
+        ? { result: knownIntegrity }
+        : await inspectRemoteBackupFile(masterPassword, savedSelectedDestination.id, path);
+      if (!allowChecksumMismatch && !integrity.result.matches) {
+        setPendingRestoreIntegrity(
+          'source' in integrity
+            ? integrity
+            : {
+              source: 'remote',
+              path,
+              fileName: path.split('/').pop() || path,
+              result: integrity.result,
+            }
+        );
+        setConfirmIntegrityWarningOpen(true);
+        return true;
+      }
       startRestoreProgress('backup-restore', path.split('/').pop() || path, {
         source: 'remote',
         delayMs: replaceExisting ? 480 : 1400,
